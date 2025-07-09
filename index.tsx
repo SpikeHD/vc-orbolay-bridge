@@ -5,11 +5,15 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
-import { Devs } from "@utils/constants";
 import definePlugin, { OptionType } from "@utils/types";
-import { ChannelStore, FluxDispatcher, GuildMemberStore, StreamerModeStore, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
+import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, Toasts, UserStore } from "@webpack/common";
+import { waitForStore } from "webpack/common/internal";
 
-type Alignment = "topleft" | "topright" | "bottomleft" | "bottomright";
+export let VoiceStateStore: GenericStore;
+export let StreamerModeStore: GenericStore;
+
+waitForStore("VoiceStateStore", m => VoiceStateStore = m);
+waitForStore("StreamerModeStore", m => StreamerModeStore = m);
 
 interface ChannelState {
     userId: string;
@@ -319,7 +323,10 @@ const createWebsocket = () => {
 export default definePlugin({
     name: "OrbolayBridge",
     description: "Bridge plugin to connect Orbolay to Discord",
-    authors: [Devs.SpikeHD],
+    authors: [{
+        name: "SpikeHD",
+        id: 221757857836564485n
+    }],
     hidden: false,
 
     settings,
