@@ -146,6 +146,22 @@ const incoming = payload => {
                 streamKey: `guild:${channel.guild_id}:${voiceState.channelId}:${userId}`,
                 appContext: "APP"
             });
+
+            break;
+        }
+        case "NAVIGATE": {
+            // If any of this isn't defined then we can't do anything anyways
+            if (!payload.guild_id || !payload.channel_id || !payload.message_id) break;
+
+            const { guild_id, channel_id, message_id } = payload;
+            FluxDispatcher.dispatch({
+                type: "CHANNEL_SELECT",
+                guildId: String(guild_id),
+                channelId: String(channel_id),
+                messageId: String(message_id),
+            });
+
+            break;
         }
     }
 };
@@ -170,7 +186,9 @@ const handleMessageNotification = dispatch => {
                 title: dispatch.title,
                 body: dispatch.body,
                 icon: dispatch.icon,
-                channelId: dispatch.channelId,
+                guildId: dispatch.message.guild_id,
+                channelId: dispatch.message.channel_id,
+                messageId: dispatch.message.id,
             }
         })
     );
