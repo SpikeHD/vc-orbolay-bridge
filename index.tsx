@@ -38,6 +38,7 @@ interface Config {
     userAlignment: CornerAlignment;
     voiceSemitransparent: boolean;
     messagesSemitransparent: boolean;
+    isKeybindEnabled: boolean;
 }
 
 const settings = definePluginSettings({
@@ -46,6 +47,12 @@ const settings = definePluginSettings({
         description: "Port to connect to",
         default: 6888,
         restartNeeded: true
+    },
+    isKeybindEnabled: {
+        type: OptionType.BOOLEAN,
+        description: "Enable/disable the global keybind (Ctrl + `)",
+        default: true,
+        restartNeeded: true,
     },
     messageAlignment: {
         type: OptionType.SELECT,
