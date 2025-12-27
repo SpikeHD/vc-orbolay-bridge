@@ -62,6 +62,10 @@ const settings = definePluginSettings({
             { label: "Top right", value: "topright" },
             { label: "Bottom left", value: "bottomleft" },
             { label: "Bottom right", value: "bottomright" },
+            { label: "Top Center", value: "topcenter" },
+            { label: "Bottom Center", value: "bottomcenter" },
+            { label: "Center Left", value: "centerleft" },
+            { label: "Center Right", value: "centerright" },
         ],
         default: "topright",
         restartNeeded: true
@@ -74,6 +78,10 @@ const settings = definePluginSettings({
             { label: "Top right", value: "topright" },
             { label: "Bottom left", value: "bottomleft" },
             { label: "Bottom right", value: "bottomright" },
+            { label: "Top Center", value: "topcenter" },
+            { label: "Bottom Center", value: "bottomcenter" },
+            { label: "Center Left", value: "centerleft" },
+            { label: "Center Right", value: "centerright" },
         ],
         default: "topleft",
         restartNeeded: true
