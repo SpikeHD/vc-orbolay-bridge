@@ -7,7 +7,7 @@
 import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
 import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, Toasts, UserStore } from "@webpack/common";
-import { waitForStore } from "webpack/common/internal";
+import { waitForStore } from "@webpack/common/internal";
 
 export let VoiceStateStore: GenericStore;
 export let StreamerModeStore: GenericStore;
