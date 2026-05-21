@@ -41,6 +41,8 @@ interface Config {
     isKeybindEnabled: boolean;
 }
 
+const liveUpdate = () => sendConfig();
+
 const settings = definePluginSettings({
     port: {
         type: OptionType.NUMBER,
@@ -52,7 +54,7 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Enable/disable the global keybind (Ctrl + `)",
         default: true,
-        restartNeeded: true,
+        onChange: liveUpdate,
     },
     messageAlignment: {
         type: OptionType.SELECT,
@@ -68,7 +70,19 @@ const settings = definePluginSettings({
             { label: "Center Right", value: "centerright" },
         ],
         default: "topright",
-        restartNeeded: true
+        onChange: liveUpdate,
+    },
+    messageOffsetX: {
+        type: OptionType.NUMBER,
+        description: "Horizontal offset for messages, in pixels",
+        default: 0,
+        onChange: liveUpdate,
+    },
+    messageOffsetY: {
+        type: OptionType.NUMBER,
+        description: "Vertical offset for messages, in pixels",
+        default: 0,
+        onChange: liveUpdate,
     },
     userAlignment: {
         type: OptionType.SELECT,
@@ -84,21 +98,48 @@ const settings = definePluginSettings({
             { label: "Center Right", value: "centerright" },
         ],
         default: "topleft",
-        restartNeeded: true
+        onChange: liveUpdate,
+    },
+    userOffsetX: {
+        type: OptionType.NUMBER,
+        description: "Horizontal offset for users, in pixels",
+        default: 0,
+        onChange: liveUpdate,
+    },
+    userOffsetY: {
+        type: OptionType.NUMBER,
+        description: "Vertical offset for users, in pixels",
+        default: 0,
+        onChange: liveUpdate,
     },
     voiceSemitransparent: {
         type: OptionType.BOOLEAN,
         description: "Make voice channel members transparent",
         default: true,
-        restartNeeded: true
+        onChange: liveUpdate,
     },
     messagesSemitransparent: {
         type: OptionType.BOOLEAN,
         description: "Make message notifications transparent",
         default: false,
-        restartNeeded: true
+        onChange: liveUpdate,
     },
 });
+
+const sendConfig = () => {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+
+    const userId = UserStore?.getCurrentUser()?.id;
+    if (!userId) return;
+
+    const config: Record<string, unknown> = { userId };
+    for (const key of Object.keys(settings.def)) {
+        config[key] = settings.store[key];
+    }
+
+    ws.send(JSON.stringify({ cmd: "REGISTER_CONFIG", ...config }));
+};
+
 let ws: WebSocket | null = null;
 let currentChannel = null;
 
@@ -309,21 +350,13 @@ const createWebsocket = () => {
             id: Toasts.genId(),
         });
 
-        // Send over the config
-        const config = {
-            ...settings.store,
-            userId: null,
-        };
-
         // Ensure we track the current user id
-        config.userId = await waitForPopulate(() => UserStore?.getCurrentUser()?.id);
+        const userId = await waitForPopulate(() => UserStore?.getCurrentUser()?.id);
 
-        ws?.send(JSON.stringify({ cmd: "REGISTER_CONFIG", ...config }));
+        sendConfig();
 
         // Send initial channel joined (if the user is in a channel)
-        const userVoiceState = VoiceStateStore.getVoiceStateForUser(
-            config.userId,
-        );
+        const userVoiceState = VoiceStateStore.getVoiceStateForUser(userId);
 
         if (!userVoiceState) {
             return;
