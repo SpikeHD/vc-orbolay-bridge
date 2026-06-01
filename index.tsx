@@ -26,103 +26,12 @@ interface ChannelState {
     selfStream: boolean;
 }
 
-interface CornerAlignment {
-    top: boolean;
-    left: boolean;
-}
-
-interface Config {
-    port: number;
-    userId: string;
-    messageAlignment: CornerAlignment;
-    userAlignment: CornerAlignment;
-    voiceSemitransparent: boolean;
-    messagesSemitransparent: boolean;
-    isKeybindEnabled: boolean;
-}
-
-const liveUpdate = () => sendConfig();
-
 const settings = definePluginSettings({
     port: {
         type: OptionType.NUMBER,
         description: "Port to connect to",
         default: 6888,
         restartNeeded: true
-    },
-    isKeybindEnabled: {
-        type: OptionType.BOOLEAN,
-        description: "Enable/disable the global keybind (Ctrl + `)",
-        default: true,
-        onChange: liveUpdate,
-    },
-    messageAlignment: {
-        type: OptionType.SELECT,
-        description: "Alignment of messages in the overlay",
-        options: [
-            { label: "Top left", value: "topleft", default: true },
-            { label: "Top right", value: "topright" },
-            { label: "Bottom left", value: "bottomleft" },
-            { label: "Bottom right", value: "bottomright" },
-            { label: "Top Center", value: "topcenter" },
-            { label: "Bottom Center", value: "bottomcenter" },
-            { label: "Center Left", value: "centerleft" },
-            { label: "Center Right", value: "centerright" },
-        ],
-        default: "topright",
-        onChange: liveUpdate,
-    },
-    messageOffsetX: {
-        type: OptionType.NUMBER,
-        description: "Horizontal offset for messages, in pixels",
-        default: 0,
-        onChange: liveUpdate,
-    },
-    messageOffsetY: {
-        type: OptionType.NUMBER,
-        description: "Vertical offset for messages, in pixels",
-        default: 0,
-        onChange: liveUpdate,
-    },
-    userAlignment: {
-        type: OptionType.SELECT,
-        description: "Alignment of users in the overlay",
-        options: [
-            { label: "Top left", value: "topleft", default: true },
-            { label: "Top right", value: "topright" },
-            { label: "Bottom left", value: "bottomleft" },
-            { label: "Bottom right", value: "bottomright" },
-            { label: "Top Center", value: "topcenter" },
-            { label: "Bottom Center", value: "bottomcenter" },
-            { label: "Center Left", value: "centerleft" },
-            { label: "Center Right", value: "centerright" },
-        ],
-        default: "topleft",
-        onChange: liveUpdate,
-    },
-    userOffsetX: {
-        type: OptionType.NUMBER,
-        description: "Horizontal offset for users, in pixels",
-        default: 0,
-        onChange: liveUpdate,
-    },
-    userOffsetY: {
-        type: OptionType.NUMBER,
-        description: "Vertical offset for users, in pixels",
-        default: 0,
-        onChange: liveUpdate,
-    },
-    voiceSemitransparent: {
-        type: OptionType.BOOLEAN,
-        description: "Make voice channel members transparent",
-        default: true,
-        onChange: liveUpdate,
-    },
-    messagesSemitransparent: {
-        type: OptionType.BOOLEAN,
-        description: "Make message notifications transparent",
-        default: false,
-        onChange: liveUpdate,
     },
 });
 
@@ -132,12 +41,7 @@ const sendConfig = () => {
     const userId = UserStore?.getCurrentUser()?.id;
     if (!userId) return;
 
-    const config: Record<string, unknown> = { userId };
-    for (const key of Object.keys(settings.def)) {
-        config[key] = settings.store[key];
-    }
-
-    ws.send(JSON.stringify({ cmd: "REGISTER_CONFIG", ...config }));
+    ws.send(JSON.stringify({ cmd: "REGISTER_CONFIG", userId }));
 };
 
 let ws: WebSocket | null = null;
@@ -155,7 +59,6 @@ const stateToPayload = (guildId: string, state: ChannelState) => ({
     userId: state.userId,
     username:
         GuildMemberStore.getNick(guildId, state.userId) ||
-        // @ts-expect-error this exists
         UserStore?.getUser(state.userId)?.globalName,
     avatarUrl: UserStore?.getUser(state.userId)?.avatar,
     channelId: state.channelId,
@@ -331,6 +234,7 @@ const createWebsocket = () => {
         }
     }, 1000);
 
+    // Use the configured port locally to open the websocket, but do not include it in REGISTER_CONFIG
     ws = new WebSocket("ws://127.0.0.1:" + settings.store.port);
     ws.onerror = e => {
         ws?.close?.();
@@ -355,6 +259,14 @@ const createWebsocket = () => {
 
         sendConfig();
 
+        // Let the client know whether we are in streamer mode
+        ws?.send(
+            JSON.stringify({
+                cmd: "STREAMER_MODE",
+                enabled: StreamerModeStore.enabled,
+            })
+        );
+
         // Send initial channel joined (if the user is in a channel)
         const userVoiceState = VoiceStateStore.getVoiceStateForUser(userId);
 
@@ -371,14 +283,6 @@ const createWebsocket = () => {
             JSON.stringify({
                 cmd: "CHANNEL_JOINED",
                 states: Object.values(channelState).map(s => stateToPayload(guildId, s as ChannelState)),
-            })
-        );
-
-        // Also let the client know whether we are in streamer mode
-        ws?.send(
-            JSON.stringify({
-                cmd: "STREAMER_MODE",
-                enabled: StreamerModeStore.enabled,
             })
         );
 
