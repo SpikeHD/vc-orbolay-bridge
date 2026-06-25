@@ -5,15 +5,13 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
+import { Button } from "@components/Button";
+import { Logger } from "@utils/Logger";
+import { EquicordDevs } from "@utils/constants";
 import definePlugin, { OptionType } from "@utils/types";
-import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, Toasts, UserStore } from "@webpack/common";
-import { waitForStore } from "@webpack/common/internal";
+import { ApplicationStreamingStore, ChannelStore, FluxDispatcher, GuildMemberStore, StreamerModeStore, Toasts, UserStore, VoiceStateStore } from "@webpack/common";
 
-export let VoiceStateStore: GenericStore;
-export let StreamerModeStore: GenericStore;
-
-waitForStore("VoiceStateStore", m => VoiceStateStore = m);
-waitForStore("StreamerModeStore", m => StreamerModeStore = m);
+const logger = new Logger("OrbolayBridge");
 
 interface ChannelState {
     userId: string;
@@ -26,28 +24,147 @@ interface ChannelState {
     selfStream: boolean;
 }
 
+const manualReconnect = () => {
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+    }
+    reconnectDelay = (settings.store.minReconnectDelay ?? 1) * 1000;
+    isRetrying = false;
+    wasConnected = false;
+
+    Toasts.show({
+        message: "Manually reconnecting to Orbolay server...",
+        type: Toasts.Type.MESSAGE,
+        id: Toasts.genId()
+    });
+
+    connect();
+};
+
+const sendTestNotification = () => {
+    if (ws?.readyState !== WebSocket.OPEN) {
+        Toasts.show({
+            message: "Cannot send test notification: Not connected to Orbolay server",
+            type: Toasts.Type.FAILURE,
+            id: Toasts.genId()
+        });
+        return;
+    }
+
+    ws.send(
+        JSON.stringify({
+            cmd: "MESSAGE_NOTIFICATION",
+            message: {
+                title: "Orbolay Test",
+                body: "This is a test notification from the Equicord OrbolayBridge plugin!",
+                icon: "https://raw.githubusercontent.com/Equicord/Equicord/refs/heads/main/browser/icon.png",
+                guildId: "0",
+                channelId: "0",
+                messageId: "0",
+            }
+        })
+    );
+
+    Toasts.show({
+        message: "Test notification sent to Orbolay",
+        type: Toasts.Type.SUCCESS,
+        id: Toasts.genId()
+    });
+};
+
+const OrbolaySettingsButtons = () => {
+    return (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+            <Button onClick={manualReconnect}>
+                Reconnect
+            </Button>
+            <Button onClick={sendTestNotification}>
+                Send Test Notification
+            </Button>
+        </div>
+    );
+};
+
 const settings = definePluginSettings({
     port: {
         type: OptionType.NUMBER,
-        description: "Port to connect to",
+        description: "Port to connect to.",
         default: 6888,
         restartNeeded: true
     },
+    autoReconnect: {
+        type: OptionType.BOOLEAN,
+        description: "Auto-reconnect to Orbolay server when connection is lost.",
+        default: true,
+        restartNeeded: false
+    },
+    maxReconnectDelay: {
+        type: OptionType.SLIDER,
+        description: "Maximum reconnect delay (in seconds).",
+        markers: [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 300],
+        stickToMarkers: false,
+        default: 60,
+        restartNeeded: false
+    },
+    minReconnectDelay: {
+        type: OptionType.SLIDER,
+        description: "Minimum reconnect delay (in seconds).",
+        markers: [1, 2, 5, 10, 15, 20, 25, 30],
+        stickToMarkers: false,
+        default: 1,
+        restartNeeded: false
+    },
+    reconnectMultiplier: {
+        type: OptionType.SLIDER,
+        description: "Reconnect backoff multiplier.",
+        markers: [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5],
+        stickToMarkers: false,
+        default: 2,
+        restartNeeded: false
+    },
+    sendConnectedNotification: {
+        type: OptionType.BOOLEAN,
+        description: "Send a connected notification to Orbolay when connected successfully.",
+        default: true,
+        restartNeeded: false
+    },
+    showToasts: {
+        type: OptionType.BOOLEAN,
+        description: "Show toast notifications for connection events.",
+        default: true,
+        restartNeeded: false
+    },
+    buttons: {
+        type: OptionType.COMPONENT,
+        component: OrbolaySettingsButtons
+    }
 });
+
+const showToast = (toast: Parameters<typeof Toasts.show>[0]) => {
+    if (settings.store.showToasts) {
+        Toasts.show(toast);
+    }
+};
 
 const sendConfig = () => {
     if (ws?.readyState !== WebSocket.OPEN) return;
 
-    const userId = UserStore?.getCurrentUser()?.id;
+    const userId = UserStore.getCurrentUser()?.id;
     if (!userId) return;
 
     ws.send(JSON.stringify({ cmd: "REGISTER_CONFIG", userId }));
 };
 
 let ws: WebSocket | null = null;
-let currentChannel = null;
+let currentChannel: string | null = null;
+let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+let reconnectDelay = 1000;
+let wasConnected = false;
+let isRetrying = false;
+let shouldConnect = false;
 
-const waitForPopulate = async fn => {
+const waitForPopulate = async <T,>(fn: () => T): Promise<T> => {
     while (true) {
         const result = await fn();
         if (result) return result;
@@ -55,18 +172,31 @@ const waitForPopulate = async fn => {
     }
 };
 
-const stateToPayload = (guildId: string, state: ChannelState) => ({
-    userId: state.userId,
-    username:
-        GuildMemberStore.getNick(guildId, state.userId) ||
-        UserStore?.getUser(state.userId)?.globalName,
-    avatarUrl: UserStore?.getUser(state.userId)?.avatar,
-    channelId: state.channelId,
-    deaf: state.deaf || state.selfDeaf,
-    mute: state.mute || state.selfMute,
-    streaming: state.selfStream,
-    speaking: false,
-});
+const stateToPayload = (guildId: string, state: any) => {
+    const activeStream = ApplicationStreamingStore.getCurrentUserActiveStream();
+    let isWatchingMe = false;
+    if (activeStream) {
+        const viewers = ApplicationStreamingStore.getViewerIds(activeStream);
+        if (viewers && viewers.includes(state.userId)) {
+            isWatchingMe = true;
+        }
+    }
+
+    return {
+        userId: state.userId,
+        username:
+            GuildMemberStore.getNick(guildId, state.userId) ||
+            UserStore.getUser(state.userId)?.globalName,
+        avatarUrl: UserStore.getUser(state.userId)?.avatar,
+        channelId: state.channelId,
+        deaf: state.deaf || state.selfDeaf,
+        mute: state.mute || state.selfMute,
+        streaming: state.selfStream || state.stream,
+        video: state.selfVideo || state.video,
+        watching: isWatchingMe,
+        speaking: false,
+    };
+};
 
 const incoming = payload => {
     switch (payload.cmd) {
@@ -93,12 +223,11 @@ const incoming = payload => {
             });
             break;
         case "STOP_STREAM": {
-            const userId = UserStore?.getCurrentUser()?.id;
-            const voiceState = VoiceStateStore?.getVoiceStateForUser(userId);
-            const channel = ChannelStore?.getChannel?.(voiceState?.channelId);
-
-            // If any of these are null, we can't do anything
-            if (!userId || !voiceState || !channel) return;
+            const userId = UserStore.getCurrentUser().id;
+            const voiceState = VoiceStateStore.getVoiceStateForUser(userId);
+            if (!voiceState?.channelId) return;
+            const channel = ChannelStore.getChannel(voiceState.channelId);
+            if (!channel) return;
 
             FluxDispatcher.dispatch({
                 type: "STREAM_STOP",
@@ -109,7 +238,6 @@ const incoming = payload => {
             break;
         }
         case "NAVIGATE": {
-            // If any of this isn't defined then we can't do anything anyways
             if (!payload.guild_id || !payload.channel_id || !payload.message_id) break;
 
             const { guild_id, channel_id, message_id } = payload;
@@ -154,8 +282,7 @@ const handleMessageNotification = dispatch => {
 };
 
 const handleVoiceStateUpdates = async dispatch => {
-    // Ensure we are in the channel that the update is for
-    const id = UserStore?.getCurrentUser()?.id;
+    const { id } = UserStore.getCurrentUser();
 
     for (const state of dispatch.voiceStates) {
         const ourState = state.userId === id;
@@ -190,7 +317,6 @@ const handleVoiceStateUpdates = async dispatch => {
             }
         }
 
-        // If this is for the channel we are in, send a VOICE_STATE_UPDATE
         if (
             !!currentChannel &&
             (state.channelId === currentChannel ||
@@ -206,6 +332,26 @@ const handleVoiceStateUpdates = async dispatch => {
     }
 };
 
+const handleStreamWatchers = async () => {
+    if (!currentChannel) return;
+    const voiceStates = VoiceStateStore.getVoiceStatesForChannel(currentChannel);
+    if (!voiceStates) return;
+
+    const userId = UserStore.getCurrentUser()?.id;
+    if (!userId) return;
+    const channel = ChannelStore.getChannel(currentChannel);
+    if (!channel) return;
+    const guildId = channel.guild_id;
+    if (!guildId) return;
+
+    ws?.send(
+        JSON.stringify({
+            cmd: "CHANNEL_JOINED",
+            states: Object.values(voiceStates).map(s => stateToPayload(guildId, s as any)),
+        })
+    );
+};
+
 const handleStreamerMode = dispatch => {
     ws?.send(
         JSON.stringify({
@@ -215,49 +361,62 @@ const handleStreamerMode = dispatch => {
     );
 };
 
-const createWebsocket = () => {
-    console.log("Attempting to connect to Orbolay server");
-
-    // First ensure old connection is closed
-    if (ws?.close) ws.close();
-
-    setTimeout(() => {
-        // If the ws is not ready, kill it and log
-        if (ws?.readyState !== WebSocket.OPEN) {
-            Toasts.show({
-                message: "Orbolay websocket could not connect. Is it running?",
-                type: Toasts.Type.FAILURE,
-                id: Toasts.genId(),
-            });
-            ws = null;
-            return;
+const cleanWebSocket = () => {
+    if (ws) {
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        try {
+            ws.close();
+        } catch (e) {
+            logger.error("Failed to close WebSocket:", e);
         }
-    }, 1000);
+        ws = null;
+    }
+};
 
-    // Use the configured port locally to open the websocket, but do not include it in REGISTER_CONFIG
+const connect = () => {
+    if (!shouldConnect) return;
+
+    cleanWebSocket();
+
+    logger.info(`Attempting to connect to Orbolay server (delay: ${reconnectDelay}ms)`);
+
     ws = new WebSocket("ws://127.0.0.1:" + settings.store.port);
-    ws.onerror = e => {
-        ws?.close?.();
-        ws = null;
-        throw e;
-    };
-    ws.onmessage = e => {
-        incoming(JSON.parse(e.data));
-    };
-    ws.onclose = () => {
-        ws = null;
-    };
+
     ws.onopen = async () => {
-        Toasts.show({
+        logger.info("Connected to Orbolay server");
+        wasConnected = true;
+        isRetrying = false;
+        reconnectDelay = (settings.store.minReconnectDelay ?? 1) * 1000;
+
+        showToast({
             message: "Connected to Orbolay server",
             type: Toasts.Type.SUCCESS,
             id: Toasts.genId(),
         });
 
-        // Ensure we track the current user id
-        const userId = await waitForPopulate(() => UserStore?.getCurrentUser()?.id);
+        const userId = await waitForPopulate(() => UserStore.getCurrentUser()?.id);
+        if (!userId) return;
 
         sendConfig();
+
+        if (settings.store.sendConnectedNotification) {
+            ws?.send(
+                JSON.stringify({
+                    cmd: "MESSAGE_NOTIFICATION",
+                    message: {
+                        title: "Connected ✅",
+                        body: "Discord is now connected",
+                        icon: "https://raw.githubusercontent.com/Equicord/Equicord/refs/heads/main/browser/icon.png",
+                        guildId: "0",
+                        channelId: "0",
+                        messageId: "0",
+                    }
+                })
+            );
+        }
 
         // Let the client know whether we are in streamer mode
         ws?.send(
@@ -267,17 +426,15 @@ const createWebsocket = () => {
             })
         );
 
-        // Send initial channel joined (if the user is in a channel)
         const userVoiceState = VoiceStateStore.getVoiceStateForUser(userId);
+        if (!userVoiceState || !userVoiceState.channelId) return;
 
-        if (!userVoiceState) {
-            return;
-        }
+        const channel = ChannelStore.getChannel(userVoiceState.channelId);
+        if (!channel) return;
 
-        const channelState = VoiceStateStore.getVoiceStatesForChannel(
-            userVoiceState.channelId
-        );
-        const { guildId } = userVoiceState;
+        const guildId = channel.guild_id;
+        const channelState = VoiceStateStore.getVoiceStatesForChannel(userVoiceState.channelId);
+        if (!guildId || !channelState) return;
 
         ws?.send(
             JSON.stringify({
@@ -288,32 +445,86 @@ const createWebsocket = () => {
 
         currentChannel = userVoiceState.channelId;
     };
+
+    ws.onmessage = e => {
+        try {
+            incoming(JSON.parse(e.data));
+        } catch (err) {
+            logger.error("Error parsing message:", err);
+        }
+    };
+
+    ws.onerror = e => {
+        logger.error("WebSocket error:", e);
+    };
+
+    ws.onclose = () => {
+        cleanWebSocket();
+
+        if (wasConnected) {
+            logger.info("Disconnected from Orbolay server.");
+            wasConnected = false;
+            showToast({
+                message: "Disconnected from Orbolay server",
+                type: Toasts.Type.FAILURE,
+                id: Toasts.genId(),
+            });
+        } else if (!isRetrying) {
+            showToast({
+                message: "Orbolay websocket could not connect. Is it running?",
+                type: Toasts.Type.FAILURE,
+                id: Toasts.genId(),
+            });
+            isRetrying = true;
+        }
+
+        if (shouldConnect && settings.store.autoReconnect) {
+            const currentDelay = reconnectDelay;
+            const maxDelayMs = (settings.store.maxReconnectDelay ?? 60) * 1000;
+            const minDelayMs = (settings.store.minReconnectDelay ?? 1) * 1000;
+            const multiplier = settings.store.reconnectMultiplier ?? 2;
+            reconnectDelay = Math.max(minDelayMs, Math.min(reconnectDelay * multiplier, maxDelayMs));
+
+            reconnectTimeout = setTimeout(() => {
+                connect();
+            }, currentDelay);
+        }
+    };
 };
 
 export default definePlugin({
     name: "OrbolayBridge",
-    description: "Bridge plugin to connect Orbolay to Discord",
-    authors: [{
-        name: "SpikeHD",
-        id: 221757857836564485n
-    }],
-    hidden: false,
-
+    description: "Bridge plugin to connect Discord to Orbolay via WebSocket",
+    tags: ["Utility", "Voice"],
+    authors: [EquicordDevs.SpikeHD],
     settings,
-
     flux: {
         SPEAKING: handleSpeaking,
         VOICE_STATE_UPDATES: handleVoiceStateUpdates,
         RPC_NOTIFICATION_CREATE: handleMessageNotification,
         STREAMER_MODE: handleStreamerMode,
+        STREAM_WATCHERS_ADD: handleStreamWatchers,
+        STREAM_WATCHERS_REMOVE: handleStreamWatchers,
     },
+    /*toolboxActions: { // These are good for testing
+        "Reconnect": manualReconnect,
+        "Test Notification": sendTestNotification,
+    },*/
 
     start() {
-        createWebsocket();
+        shouldConnect = true;
+        wasConnected = false;
+        isRetrying = false;
+        reconnectDelay = (settings.store.minReconnectDelay ?? 1) * 1000;
+        connect();
     },
 
     stop() {
-        ws?.close?.();
-        ws = null;
+        shouldConnect = false;
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
+        cleanWebSocket();
     }
 });
