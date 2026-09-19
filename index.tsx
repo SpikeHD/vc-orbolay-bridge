@@ -6,14 +6,17 @@
 
 import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
+import { SoundboardSound } from "@vencord/discord-types";
 import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, Toasts, UserStore } from "@webpack/common";
 import { waitForStore } from "@webpack/common/internal";
 
 export let VoiceStateStore: GenericStore;
 export let StreamerModeStore: GenericStore;
+export let SoundboardStore: GenericStore;
 
 waitForStore("VoiceStateStore", m => VoiceStateStore = m);
 waitForStore("StreamerModeStore", m => StreamerModeStore = m);
+waitForStore("SoundboardStore", m => SoundboardStore = m);
 
 interface ChannelState {
     userId: string;
@@ -24,6 +27,16 @@ interface ChannelState {
     selfDeaf: boolean;
     selfMute: boolean;
     selfStream: boolean;
+}
+
+interface SoundboardSoundPayload {
+    sound_id: string;
+    name: string;
+    volume: number;
+    emoji_id: string | null;
+    emoji_name: string | null;
+    guild_id: string | null;
+    available: boolean;
 }
 
 const settings = definePluginSettings({
@@ -67,6 +80,45 @@ const stateToPayload = (guildId: string, state: ChannelState) => ({
     streaming: state.selfStream,
     speaking: false,
 });
+
+const toSoundboardPayload = (sound: SoundboardSound, fallbackGuild?: string): SoundboardSoundPayload | null => {
+    const soundId = sound?.soundId;
+    if (!soundId) return null;
+
+    const guildId = sound?.guildId ?? fallbackGuild;
+
+    return {
+        sound_id: soundId,
+        name: sound.name,
+        volume: sound.volume,
+        emoji_id: sound?.emojiId ?? null,
+        emoji_name: sound?.emojiName ?? null,
+        guild_id: !guildId || guildId === "0" ? null : guildId,
+        available: sound.available,
+    };
+};
+
+const getSoundboardSounds = (): SoundboardSoundPayload[] => {
+    const sounds: SoundboardSoundPayload[] = [];
+
+    for (const [guildKey, guildSounds] of SoundboardStore?.getSounds?.() ?? []) {
+        for (const sound of guildSounds ?? []) {
+            const payload = toSoundboardPayload(sound, guildKey);
+            if (payload) sounds.push(payload);
+        }
+    }
+
+    return sounds;
+};
+
+const sendSoundboardUpdate = () => {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+
+    const sounds = getSoundboardSounds();
+    if (!sounds.length) return;
+
+    ws.send(JSON.stringify({ cmd: "SOUNDBOARD_UPDATE", sounds }));
+};
 
 const incoming = payload => {
     switch (payload.cmd) {
@@ -175,6 +227,8 @@ const handleVoiceStateUpdates = async dispatch => {
                 );
 
                 currentChannel = state.channelId;
+
+                sendSoundboardUpdate();
 
                 break;
             } else if (!state.channelId) {
@@ -287,6 +341,8 @@ const createWebsocket = () => {
         );
 
         currentChannel = userVoiceState.channelId;
+
+        sendSoundboardUpdate();
     };
 };
 
