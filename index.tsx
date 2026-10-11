@@ -59,6 +59,8 @@ const sendConfig = () => {
 
 let ws: WebSocket | null = null;
 let currentChannel = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let stopped = false;
 
 const waitForPopulate = async fn => {
     while (true) {
@@ -293,30 +295,21 @@ const createWebsocket = () => {
     // First ensure old connection is closed
     if (ws?.close) ws.close();
 
-    setTimeout(() => {
-        // If the ws is not ready, kill it and log
-        if (ws?.readyState !== WebSocket.OPEN) {
-            Toasts.show({
-                text: "Orbolay websocket could not connect. Is it running?",
-                variant: "critical",
-            });
-            ws = null;
-            return;
-        }
-    }, 1000);
-
-    // Use the configured port locally to open the websocket, but do not include it in REGISTER_CONFIG
     ws = new WebSocket("ws://127.0.0.1:" + settings.store.port);
-    ws.onerror = e => {
+    ws.onerror = () => {
         ws?.close?.();
         ws = null;
-        throw e;
     };
     ws.onmessage = e => {
         incoming(JSON.parse(e.data));
     };
     ws.onclose = () => {
         ws = null;
+
+        if (!stopped) {
+            if (retryTimer) clearTimeout(retryTimer);
+            retryTimer = setTimeout(createWebsocket, 5000);
+        }
     };
     ws.onopen = async () => {
         Toasts.show({
@@ -384,10 +377,14 @@ export default definePlugin({
     },
 
     start() {
+        stopped = false;
+        if (retryTimer) clearTimeout(retryTimer);
         createWebsocket();
     },
 
     stop() {
+        stopped = true;
+        if (retryTimer) clearTimeout(retryTimer);
         ws?.close?.();
         ws = null;
     }
