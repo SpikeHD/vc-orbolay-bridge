@@ -279,9 +279,8 @@ const createWebsocket = () => {
         // If the ws is not ready, kill it and log
         if (ws?.readyState !== WebSocket.OPEN) {
             Toasts.show({
-                message: "Orbolay websocket could not connect. Is it running?",
-                type: Toasts.Type.FAILURE,
-                id: Toasts.genId(),
+                text: "Orbolay websocket could not connect. Is it running?",
+                variant: "critical",
             });
             ws = null;
             return;
@@ -303,9 +302,8 @@ const createWebsocket = () => {
     };
     ws.onopen = async () => {
         Toasts.show({
-            message: "Connected to Orbolay server",
-            type: Toasts.Type.SUCCESS,
-            id: Toasts.genId(),
+            text: "Connected to Orbolay server",
+            variant: "success",
         });
 
         // Ensure we track the current user id
