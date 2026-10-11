@@ -68,18 +68,33 @@ const waitForPopulate = async fn => {
     }
 };
 
-const stateToPayload = (guildId: string, state: ChannelState) => ({
-    userId: state.userId,
-    username:
-        GuildMemberStore.getNick(guildId, state.userId) ||
-        UserStore?.getUser(state.userId)?.globalName,
-    avatarUrl: UserStore?.getUser(state.userId)?.avatar,
-    channelId: state.channelId,
-    deaf: state.deaf || state.selfDeaf,
-    mute: state.mute || state.selfMute,
-    streaming: state.selfStream,
-    speaking: false,
-});
+const waitForUserData = async (guildId: string, userId: string) => {
+    const isKnown = () =>
+        !!GuildMemberStore.getNick(guildId, userId) ||
+        !!UserStore?.getUser(userId)?.globalName;
+
+    const deadline = Date.now() + 3000;
+    while (!isKnown() && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+};
+
+const stateToPayload = async (guildId: string, state: ChannelState) => {
+    await waitForUserData(guildId, state.userId);
+
+    return {
+        userId: state.userId,
+        username:
+            GuildMemberStore.getNick(guildId, state.userId) ||
+            UserStore?.getUser(state.userId)?.globalName,
+        avatarUrl: UserStore?.getUser(state.userId)?.avatar,
+        channelId: state.channelId,
+        deaf: state.deaf || state.selfDeaf,
+        mute: state.mute || state.selfMute,
+        streaming: state.selfStream,
+        speaking: false,
+    };
+};
 
 const toSoundboardPayload = (sound: SoundboardSound, fallbackGuild?: string): SoundboardSoundPayload | null => {
     const soundId = sound?.soundId;
@@ -222,7 +237,10 @@ const handleVoiceStateUpdates = async dispatch => {
                 ws?.send(
                     JSON.stringify({
                         cmd: "CHANNEL_JOINED",
-                        states: Object.values(voiceStates).map(s => stateToPayload(guildId, s as ChannelState)),
+                        states:
+                            await Promise.all(
+                                Object.values(voiceStates).map(s => stateToPayload(guildId, s as ChannelState))
+                            ),
                     })
                 );
 
@@ -253,7 +271,7 @@ const handleVoiceStateUpdates = async dispatch => {
             ws?.send(
                 JSON.stringify({
                     cmd: "VOICE_STATE_UPDATE",
-                    state: stateToPayload(guildId, state as ChannelState),
+                    state: await stateToPayload(guildId, state as ChannelState),
                 })
             );
         }
@@ -334,7 +352,10 @@ const createWebsocket = () => {
         ws?.send(
             JSON.stringify({
                 cmd: "CHANNEL_JOINED",
-                states: Object.values(channelState).map(s => stateToPayload(guildId, s as ChannelState)),
+                states:
+                    await Promise.all(
+                        Object.values(channelState).map(s => stateToPayload(guildId, s as ChannelState))
+                    ),
             })
         );
 
