@@ -20,7 +20,7 @@ waitForStore("SoundboardStore", m => SoundboardStore = m);
 
 interface ChannelState {
     userId: string;
-    channelId: string;
+    channelId: string | null;
     deaf: boolean;
     mute: boolean;
     stream: boolean;
@@ -70,13 +70,14 @@ const waitForPopulate = async fn => {
     }
 };
 
-const waitForUserData = async (guildId: string, userId: string) => {
-    const isKnown = () =>
-        !!GuildMemberStore.getNick(guildId, userId) ||
-        !!UserStore?.getUser(userId)?.globalName;
+const usernameFor = (guildId: string, userId: string) =>
+    GuildMemberStore.getNick(guildId, userId) ||
+    UserStore?.getUser(userId)?.globalName ||
+    UserStore?.getUser(userId)?.username;
 
+const waitForUserData = async (guildId: string, userId: string) => {
     const deadline = Date.now() + 3000;
-    while (!isKnown() && Date.now() < deadline) {
+    while (!usernameFor(guildId, userId) && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 100));
     }
 };
@@ -86,11 +87,9 @@ const stateToPayload = async (guildId: string, state: ChannelState) => {
 
     return {
         userId: state.userId,
-        username:
-            GuildMemberStore.getNick(guildId, state.userId) ||
-            UserStore?.getUser(state.userId)?.globalName,
+        username: usernameFor(guildId, state.userId),
         avatarUrl: UserStore?.getUser(state.userId)?.avatar,
-        channelId: state.channelId,
+        channelId: state.channelId ?? null,
         deaf: state.deaf || state.selfDeaf,
         mute: state.mute || state.selfMute,
         streaming: state.selfStream,
