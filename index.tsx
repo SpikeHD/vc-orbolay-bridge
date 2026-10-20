@@ -7,7 +7,7 @@
 import { definePluginSettings } from "@api/Settings";
 import definePlugin, { OptionType } from "@utils/types";
 import { SoundboardSound } from "@vencord/discord-types";
-import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, Toasts, UserStore } from "@webpack/common";
+import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, showToast, UserStore } from "@webpack/common";
 import { waitForStore } from "@webpack/common/internal";
 
 export let VoiceStateStore: GenericStore;
@@ -311,7 +311,7 @@ const createWebsocket = () => {
         }
     };
     ws.onopen = async () => {
-        Toasts.show({
+        showToast({
             text: "Connected to Orbolay server",
             variant: "success",
         });
