@@ -8,7 +8,7 @@ import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
 import definePlugin, { OptionType } from "@utils/types";
 import { SoundboardSound, VoiceState } from "@vencord/discord-types";
-import { ChannelStore, FluxDispatcher, GuildMemberStore, showToast, SoundboardStore, StreamerModeStore, UserStore, VoiceStateStore } from "@webpack/common";
+import { ChannelStore, FluxDispatcher, GuildMemberStore, RelationshipStore, showToast, SoundboardStore, StreamerModeStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 interface SoundboardSoundPayload {
     sound_id: string;
@@ -65,6 +65,7 @@ const waitForPopulate = async fn => {
 };
 
 const usernameFor = (guildId: string, userId: string) =>
+    (!guildId && RelationshipStore.getNickname(userId)) ||
     GuildMemberStore.getNick(guildId, userId) ||
     UserStore?.getUser(userId)?.globalName ||
     UserStore?.getUser(userId)?.username;
