@@ -7,28 +7,8 @@
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
 import definePlugin, { OptionType } from "@utils/types";
-import { SoundboardSound } from "@vencord/discord-types";
-import { ChannelStore, FluxDispatcher, GenericStore, GuildMemberStore, showToast, UserStore } from "@webpack/common";
-import { waitForStore } from "@webpack/common/internal";
-
-export let VoiceStateStore: GenericStore;
-export let StreamerModeStore: GenericStore;
-export let SoundboardStore: GenericStore;
-
-waitForStore("VoiceStateStore", m => VoiceStateStore = m);
-waitForStore("StreamerModeStore", m => StreamerModeStore = m);
-waitForStore("SoundboardStore", m => SoundboardStore = m);
-
-interface ChannelState {
-    userId: string;
-    channelId: string | null;
-    deaf: boolean;
-    mute: boolean;
-    stream: boolean;
-    selfDeaf: boolean;
-    selfMute: boolean;
-    selfStream: boolean;
-}
+import { SoundboardSound, VoiceState } from "@vencord/discord-types";
+import { ChannelStore, FluxDispatcher, GuildMemberStore, showToast, SoundboardStore, StreamerModeStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 interface SoundboardSoundPayload {
     sound_id: string;
@@ -65,14 +45,14 @@ const settings = definePluginSettings({
 const sendConfig = () => {
     if (ws?.readyState !== WebSocket.OPEN) return;
 
-    const userId = UserStore?.getCurrentUser()?.id;
+    const userId = UserStore.getCurrentUser()?.id;
     if (!userId) return;
 
     ws.send(JSON.stringify({ cmd: "REGISTER_CONFIG", userId }));
 };
 
 let ws: WebSocket | null = null;
-let currentChannel = null;
+let currentChannel: string | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 
@@ -96,7 +76,7 @@ const waitForUserData = async (guildId: string, userId: string) => {
     }
 };
 
-const stateToPayload = async (guildId: string, state: ChannelState) => {
+const stateToPayload = async (guildId: string, state: VoiceState) => {
     await waitForUserData(guildId, state.userId);
 
     return {
@@ -131,7 +111,7 @@ const toSoundboardPayload = (sound: SoundboardSound, fallbackGuild?: string): So
 const getSoundboardSounds = (): SoundboardSoundPayload[] => {
     const sounds: SoundboardSoundPayload[] = [];
 
-    for (const [guildKey, guildSounds] of SoundboardStore?.getSounds?.() ?? []) {
+    for (const [guildKey, guildSounds] of SoundboardStore.getSounds() ?? []) {
         for (const sound of guildSounds ?? []) {
             const payload = toSoundboardPayload(sound, guildKey);
             if (payload) sounds.push(payload);
@@ -175,12 +155,11 @@ const incoming = payload => {
             });
             break;
         case "STOP_STREAM": {
-            const userId = UserStore?.getCurrentUser()?.id;
-            const voiceState = VoiceStateStore?.getVoiceStateForUser(userId);
-            const channel = ChannelStore?.getChannel?.(voiceState?.channelId);
-
-            // If any of these are null, we can't do anything
-            if (!userId || !voiceState || !channel) return;
+            const userId = UserStore.getCurrentUser().id;
+            const voiceState = VoiceStateStore.getVoiceStateForUser(userId);
+            if (!voiceState?.channelId) return;
+            const channel = ChannelStore.getChannel(voiceState.channelId);
+            if (!channel) return;
 
             FluxDispatcher.dispatch({
                 type: "STREAM_STOP",
@@ -191,7 +170,6 @@ const incoming = payload => {
             break;
         }
         case "NAVIGATE": {
-            // If any of this isn't defined then we can't do anything anyways
             if (!payload.guild_id || !payload.channel_id || !payload.message_id) break;
 
             const { guild_id, channel_id, message_id } = payload;
@@ -236,11 +214,10 @@ const handleMessageNotification = dispatch => {
 };
 
 const handleVoiceStateUpdates = async dispatch => {
-    // Ensure we are in the channel that the update is for
-    const id = UserStore?.getCurrentUser()?.id;
+    const userId = UserStore.getCurrentUser()?.id;
 
     for (const state of dispatch.voiceStates) {
-        const ourState = state.userId === id;
+        const ourState = state.userId === userId;
         const { guildId } = state;
 
         if (ourState) {
@@ -254,7 +231,7 @@ const handleVoiceStateUpdates = async dispatch => {
                         cmd: "CHANNEL_JOINED",
                         states:
                             await Promise.all(
-                                Object.values(voiceStates).map(s => stateToPayload(guildId, s as ChannelState))
+                                Object.values(voiceStates).map(s => stateToPayload(guildId, s as VoiceState))
                             ),
                     })
                 );
@@ -277,7 +254,6 @@ const handleVoiceStateUpdates = async dispatch => {
             }
         }
 
-        // If this is for the channel we are in, send a VOICE_STATE_UPDATE
         if (
             !!currentChannel &&
             (state.channelId === currentChannel ||
@@ -286,7 +262,7 @@ const handleVoiceStateUpdates = async dispatch => {
             ws?.send(
                 JSON.stringify({
                     cmd: "VOICE_STATE_UPDATE",
-                    state: await stateToPayload(guildId, state as ChannelState),
+                    state: await stateToPayload(guildId, state as VoiceState),
                 })
             );
         }
@@ -304,14 +280,17 @@ const handleStreamerMode = dispatch => {
 
 const createWebsocket = () => {
     console.log("Attempting to connect to Orbolay server");
-
-    // First ensure old connection is closed
     if (ws?.close) ws.close();
 
     ws = new WebSocket("ws://127.0.0.1:" + settings.store.port);
     ws.onerror = () => {
         ws?.close?.();
         ws = null;
+
+        if (!stopped) {
+            if (retryTimer) clearTimeout(retryTimer);
+            retryTimer = setTimeout(createWebsocket, 5000);
+        }
     };
     ws.onmessage = e => {
         incoming(JSON.parse(e.data));
@@ -325,13 +304,10 @@ const createWebsocket = () => {
         }
     };
     ws.onopen = async () => {
-        showToast({
-            text: "Connected to Orbolay server",
-            variant: "success",
-        });
+        showToast({ text: "Connected to Orbolay server", variant: "success" });
 
-        // Ensure we track the current user id
-        const userId = await waitForPopulate(() => UserStore?.getCurrentUser()?.id);
+        const userId = await waitForPopulate(() => UserStore.getCurrentUser().id);
+        if (!userId) return;
 
         sendConfig();
 
@@ -343,24 +319,22 @@ const createWebsocket = () => {
             })
         );
 
-        // Send initial channel joined (if the user is in a channel)
         const userVoiceState = VoiceStateStore.getVoiceStateForUser(userId);
+        if (!userVoiceState || !userVoiceState.channelId) return;
 
-        if (!userVoiceState) {
-            return;
-        }
+        const channel = ChannelStore.getChannel(userVoiceState.channelId);
+        if (!channel) return;
 
-        const channelState = VoiceStateStore.getVoiceStatesForChannel(
-            userVoiceState.channelId
-        );
-        const { guildId } = userVoiceState;
+        const guildId = channel.guild_id;
+        const channelState = VoiceStateStore.getVoiceStatesForChannel(userVoiceState.channelId);
+        if (!guildId || !channelState) return;
 
         ws?.send(
             JSON.stringify({
                 cmd: "CHANNEL_JOINED",
                 states:
                     await Promise.all(
-                        Object.values(channelState).map(s => stateToPayload(guildId, s as ChannelState))
+                        Object.values(channelState).map(s => stateToPayload(guildId, s as VoiceState))
                     ),
             })
         );
@@ -374,14 +348,14 @@ const createWebsocket = () => {
 export default definePlugin({
     name: "OrbolayBridge",
     description: "Bridge plugin to connect Orbolay to Discord",
-    authors: [{
-        name: "SpikeHD",
-        id: 221757857836564485n
-    }],
-    hidden: false,
-
+    tags: ["Utility", "Voice"],
+    authors: [
+        {
+            name: "SpikeHD",
+            id: 221757857836564485n
+        }
+    ],
     settings,
-
     flux: {
         SPEAKING: handleSpeaking,
         VOICE_STATE_UPDATES: handleVoiceStateUpdates,
