@@ -8,7 +8,7 @@ import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
 import definePlugin, { OptionType } from "@utils/types";
 import { SoundboardSound, VoiceState } from "@vencord/discord-types";
-import { ChannelStore, FluxDispatcher, GuildMemberStore, RelationshipStore, showToast, SoundboardStore, StreamerModeStore, UserStore, VoiceStateStore } from "@webpack/common";
+import { ChannelStore, FluxDispatcher, GuildMemberStore, GuildStore, RelationshipStore, showToast, SoundboardStore, StreamerModeStore, UserStore, VoiceStateStore } from "@webpack/common";
 
 interface SoundboardSoundPayload {
     sound_id: string;
@@ -285,6 +285,7 @@ const handleMessageCreate = ({ channelId, message }) => {
             cmd: "VOICE_CHANNEL_MESSAGE",
             channel_id: channelId,
             channel_name: ChannelStore.getChannel(channelId)?.name ?? null,
+            guild_name: GuildStore.getGuild(message.guild_id)?.name ?? null,
             message: {
                 id: message.id,
                 type: message.type,
